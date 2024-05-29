@@ -37,4 +37,8 @@ impl CaseHttpHeaders {
     pub fn as_slice(&self) -> &[u8] {
         &self.0
     }
+
+    pub fn from_slice(buf: &[u8]) -> Self {
+        CaseHttpHeaders(Bytes::copy_from_slice(buf))
+    }
 }

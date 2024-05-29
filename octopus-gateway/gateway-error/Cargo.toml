@@ -1,11 +1,8 @@
 [package]
-name = "gateway-httpd"
+name = "gateway-error"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-http = { workspace = true }
-bytes = { workspace = true }
-gateway-error = {version = "0.1.0", path = "../gateway-error"}
