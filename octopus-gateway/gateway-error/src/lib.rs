@@ -29,7 +29,8 @@ use std::error::Error as ErrorTrait;
 
 pub type BError = Box(Error);
 
-pub type Result<T, E = BError> = StdResult(T, E);
+/// code fix: wrong type definition fix
+pub type Result<T, E = BError> = StdResult<T, E>;
 
 #[derive(Debug)]
 pub struct Error {

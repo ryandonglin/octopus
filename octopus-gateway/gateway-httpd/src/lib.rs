@@ -1,13 +1,37 @@
+//                                      MIT License
+//
+// Copyright (c) [2024] [ryandonglin]
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
 #[allow(clippy::new_without_default)]
 use http::request::{Parts as ReqParts, Parts};
 use http::request::Builder as ReqBuilder;
 pub use http::HeaderMap as HMap;
 use std::ops::Deref;
-use http::{Method, Uri};
+use http::{HeaderName, HeaderValue, Method, Uri};
+use http::header::{AsHeaderName, IntoHeaderName};
 use gateway_error::{ErrorType::*, Result};
 
 mod http_header_support;
 use http_header_support::CaseHttpHeaders;
+use crate::http_header_support::IntoCaseHeader;
 
 pub mod prelude {
     pub use crate::RequestHeader;
@@ -70,6 +94,10 @@ impl RequestHeader {
         size_hint: Option<usize>
     ) -> Result<Self> {
         let mut req = Self::build_no_case(method, path, size_hint)?;
+
+        /// problems fix, cause by previous step [Self::build_no_case] return wrong type, which return
+        /// [(RequestHeader, Box<Error>)] tuple type while actually expected [RequestHeader] type, cause by
+        /// [gateway_error::Result] wrong type definition
         req.header_name_map = Some(CaseMap::with_capacity(http_header_map_upper_bound(
             size_hint,
         )));
@@ -109,6 +137,81 @@ impl RequestHeader {
 
         Ok(req)
     }
+
+    /// append the header name and value to `self`
+    ///
+    /// if there are already some header with(under) the same name, a new name will be added without
+    /// removing other existed;
+    pub fn append_header(
+        &mut self,
+        name: impl IntoCaseHeader,
+        value: impl TryInto<HeaderValue>
+    ) -> Result<bool>{
+
+        let header_value = value
+            .try_into()
+            .explain_err(InvalidHTTPHeader, |_| "invalid value to append to request header")?;
+
+        ///
+        append_header_value(
+            self.header_name_map.as_mut(),
+            &mut self.base.headers,
+            name,
+            header_value
+        )
+    }
+
+    /// insert specific header-name into `self`
+    ///
+    /// different with [Self::append_header()], this method will replace all other existing headers
+    /// with the same name (case insensitive), see the different of [HMap::insert()] and [HMap::append()]
+    pub fn insert_header(
+        &mut self,
+        name: impl IntoCaseHeader,
+        value: impl TryInto<HeaderValue>
+    ) -> Result<bool> {
+
+        let header_value = value
+            .try_into()
+            .explain_err(InvalidHTTPHeader, |_| "invalid value to insert to request header")?;
+
+        insert_header_value(
+            self.header_name_map.as_mut(),
+            &self.base.headers,
+            name,
+            header_value
+        )
+    }
+
+    /// using lifetime annotation `'a` which will automatically management the lifetime of reference
+    pub fn remove_header<'a, N: ?Sized>(&mut self, name:&'a N) -> Option<HeaderValue>
+    where
+        &'a N: 'a + AsHeaderName {remove_header(self.header_name_map.as_mut(), &mut self.base.headers, name)}
+
+    /// set the request of http request, [POST] or [GET], etc
+    pub fn set_method(&mut self, method: Method) {
+        self.method = method;
+    }
+
+    pub fn set_uri(&mut self, uri: Uri) {
+        self.uri = uri;
+    }
+
+    pub fn raw_path(&mut self) -> &[u8] {
+        if !self.raw_path_fallback.is_empty() {
+            &self.raw_path_fallback
+        } else {
+            self.base
+                .uri
+                .path_and_query()
+                .as_ref()
+                .unwrap()
+                .as_str()
+                .as_bytes()
+        }
+    }
+
+
 }
 
 // This function returns an upper bound on the size of the header map used inside the http crate.
@@ -132,6 +235,65 @@ fn http_header_map_upper_bound(size_hint: Option<usize>) -> usize {
         size_hint.unwrap_or(INIT_HEADER_SIZE),
         PINGORA_MAX_HEADER_COUNT,
     )
+}
+
+#[inline]
+fn append_header_value<T>(
+    name_map: Option<&mut CaseMap>,
+    value_map: &mut HMap<T>,
+    name: impl IntoCaseHeader,
+    value: T
+) -> Result<bool> {
+
+    let case_header_name = name.into_case_header_name();
+
+    let header_name: HeaderName = case_header_name
+        .as_slice()
+        .try_into()
+        .or_err(InvalidHTTPHeader, "invalid http header name");
+
+    if let Some(name_map) = name_map {
+        name_map.append(header_name.clone(), case_header_name)
+    }
+
+    Ok(value_map.append(header_name, value))
+}
+
+#[inline]
+fn insert_header_value<T>(
+    name_map: Option<&mut CaseMap>,
+    value_map: &mut HMap<T>,
+    name: impl IntoCaseHeader,
+    value: T
+) -> Result<bool> {
+
+    let case_header_name = name.into_case_header_name();
+
+    let header_name: HeaderName = case_header_name
+        .as_slice()
+        .try_into()
+        .or_err(InvalidHTTPHeader, "invalid http header name");
+
+    if let Some(name_map) = name_map {
+        name_map.insert(header_name.clone(), case_header_name)
+    }
+
+    Ok(value_map.insert(header_name, value))
+}
+
+#[inline]
+fn remove_header<'a, T, N: ?Sized>(
+    name_map: Option<&mut CaseMap>,
+    value_map: &mut HMap<T>,
+    name: &'a N
+) -> Option<T>
+    where
+        &'a N: 'a + AsHeaderName {
+    if let Some(name_map) = name_map {
+        name_map.remove(name);
+    }
+
+    value_map.remove(name)
 }
 
 #[cfg(test)]

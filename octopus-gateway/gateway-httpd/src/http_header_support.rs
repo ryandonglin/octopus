@@ -42,3 +42,7 @@ impl CaseHttpHeaders {
         CaseHttpHeaders(Bytes::copy_from_slice(buf))
     }
 }
+
+pub trait IntoCaseHeader {
+    fn into_case_header_name(self) -> CaseHttpHeaders;
+}
