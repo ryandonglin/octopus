@@ -3,12 +3,15 @@ use http::request::{Parts as ReqParts, Parts};
 use http::request::Builder as ReqBuilder;
 pub use http::HeaderMap as HMap;
 use std::ops::Deref;
-use http::Method;
-use gateway_error::{ErrorType::*, Result}
+use http::{Method, Uri};
+use gateway_error::{ErrorType::*, Result};
 
 mod http_header_support;
 use http_header_support::CaseHttpHeaders;
 
+pub mod prelude {
+    pub use crate::RequestHeader;
+}
 
 
 type CaseMap = HMap<CaseHttpHeaders>;
@@ -26,7 +29,7 @@ pub struct RequestHeader {
     base: ReqParts,
     header_name_map: Option<CaseMap>,
     // store the raw path in bytes only if it is invalid in utf8;
-    raw_parse_fallback: Vec<u8>
+    raw_path_fallback: Vec<u8>
 
 }
 
@@ -48,16 +51,19 @@ impl Deref for RequestHeader {
 
 impl RequestHeader {
 
-    pub fn new_no_case(size_hint: Option<usize>) -> Self {
+    fn new_no_case(size_hint: Option<usize>) -> Self {
         let mut base  = ReqBuilder::new().body(()).unwrap().into_parts().0;
         base.headers.reserve(http_header_map_upper_bound(size_hint));
         RequestHeader {
             base,
             header_name_map: None,
-            raw_parse_fallback: vec![]
+            raw_path_fallback: vec![]
         }
     }
 
+    /// create new [RequestHeader] with the given method and path.
+    ///
+    /// note that the param 'path' can be non UTF-8
     pub fn build(
         method: impl TryInto<Method>,
         path: &[u8],
@@ -67,6 +73,40 @@ impl RequestHeader {
         req.header_name_map = Some(CaseMap::with_capacity(http_header_map_upper_bound(
             size_hint,
         )));
+
+        Ok(req)
+    }
+
+    pub fn build_no_case(
+        method: impl TryInto<Method>,
+        path: &[u8],
+        size_hint: Option<usize>,
+    ) -> Result<Self> {
+        let mut req = Self::new_no_case(size_hint);
+        req.base.method = method
+            .try_into()
+            .explain_err(InvalidHTTPHeader, |_| "invalid method")?;
+
+        if let Ok(p) = std::str::from_utf8(path) {
+            let uri = Uri::builder()
+                .path_and_query(p)
+                .build()
+                .explain_err(InvalidHTTPHeader, |_| format!("invalid uri {}", p))?;
+
+            req.base.uri = uri;
+            // keep raw_path empty, no need to store twice
+        } else {
+            // put a valid utf-8 path into base for read only access
+            let lossy_str = String::from_utf8_lossy(path);
+            let uri = Uri::builder()
+                .path_and_query(lossy_str.as_ref())
+                .build()
+                .explain_err(InvalidHTTPHeader, |_| format!("invalid url {}", lossy_str))?;
+
+            req.base.uri = uri;
+            req.raw_path_fallback = path.to_vec();
+        }
+
         Ok(req)
     }
 }
@@ -100,7 +140,6 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+
     }
 }
