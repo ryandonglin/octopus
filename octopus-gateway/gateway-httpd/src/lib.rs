@@ -25,6 +25,7 @@ use http::request::{Parts as ReqParts, Parts};
 use http::request::Builder as ReqBuilder;
 pub use http::HeaderMap as HMap;
 use std::ops::Deref;
+use bytes::BufMut;
 use http::{HeaderName, HeaderValue, Method, Uri};
 use http::header::{AsHeaderName, IntoHeaderName};
 use gateway_error::{ErrorType::*, Result};
@@ -188,6 +189,10 @@ impl RequestHeader {
     where
         &'a N: 'a + AsHeaderName {remove_header(self.header_name_map.as_mut(), &mut self.base.headers, name)}
 
+    pub fn header_to_h1_write(&self, buf: &mut impl BufMut) {
+        header_to_h1_write(self.header_name_map.as_mut(), &mut self.base.headers, buf)
+    }
+
     /// set the request of http request, [POST] or [GET], etc
     pub fn set_method(&mut self, method: Method) {
         self.method = method;
@@ -294,6 +299,15 @@ fn remove_header<'a, T, N: ?Sized>(
     }
 
     value_map.remove(name)
+}
+
+#[inline]
+fn header_to_h1_write(
+    key_map: Option<&CaseMap>,
+    value_map: &HMap,
+    buf: &mut impl BufMut
+) {
+
 }
 
 #[cfg(test)]
