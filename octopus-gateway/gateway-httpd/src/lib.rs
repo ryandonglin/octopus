@@ -309,10 +309,15 @@ impl ResponseHeader {
 
     fn new_no_case(size_hint: Option<usize>) -> Self {
         let mut base = RespBuilder::new().body(()).unwrap().into_parts().0;
+        base.headers.reserve(http_header_map_upper_bound(
+            size_hint,
+        ));
+
         ResponseHeader {
             base,
             header_name_map: None
         }
+
     }
 
     pub fn build(code: impl TryInto<StatusCode>, size_hint: Option<usize>) -> Result<Self> {
