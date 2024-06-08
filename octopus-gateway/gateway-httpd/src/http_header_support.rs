@@ -46,3 +46,25 @@ impl CaseHttpHeaders {
 pub trait IntoCaseHeader {
     fn into_case_header_name(self) -> CaseHttpHeaders;
 }
+
+pub(crate) fn title_header_name_str(header_name: &HeaderName) -> Option<&'static str> {
+
+    /// using * to de-referencing
+    Some(match *header_name {
+        header::AGE => "Age",
+        header::CACHE_CONTROL => "Cache-Control",
+        header::CONNECTION => "Connection",
+        header::CONTENT_TYPE => "Content-Type",
+        header::CONTENT_ENCODING => "Content-Encoding",
+        header::CONTENT_LENGTH => "Content-Length",
+        header::DATE => "Date",
+        header::TRANSFER_ENCODING => "Transfer-Encoding",
+        header::HOST => "Host",
+        header::SERVER => "Server",
+        // TODO: add more const header here to map to their titled case
+        // TODO: automatically upper case the first letter?
+        _ => {
+            return None;
+        }
+    })
+}

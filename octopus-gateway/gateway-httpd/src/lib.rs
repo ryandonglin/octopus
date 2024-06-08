@@ -21,12 +21,14 @@
 // SOFTWARE.
 
 #[allow(clippy::new_without_default)]
-use http::request::{Parts as ReqParts, Parts};
+use http::request::{Parts as ReqParts};
 use http::request::Builder as ReqBuilder;
+use http::response::{Parts as RespParts};
+use http::response::{Builder as RespBuilder};
 pub use http::HeaderMap as HMap;
 use std::ops::Deref;
 use bytes::BufMut;
-use http::{HeaderName, HeaderValue, Method, Uri};
+use http::{HeaderName, HeaderValue, Method, StatusCode, Uri, Version};
 use http::header::{AsHeaderName, IntoHeaderName};
 use gateway_error::{ErrorType::*, Result};
 
@@ -190,7 +192,7 @@ impl RequestHeader {
         &'a N: 'a + AsHeaderName {remove_header(self.header_name_map.as_mut(), &mut self.base.headers, name)}
 
     pub fn header_to_h1_write(&self, buf: &mut impl BufMut) {
-        header_to_h1_write(self.header_name_map.as_mut(), &mut self.base.headers, buf)
+        header_to_h1_write(self.header_name_map.as_ref(), &self.base.headers, buf)
     }
 
     /// set the request of http request, [POST] or [GET], etc
@@ -216,7 +218,209 @@ impl RequestHeader {
         }
     }
 
+    pub fn uri_file_extension(&self) -> Option<&str> {
+        let(_, ext) = self
+            .uri
+            .path_and_query()
+            .and_then(|pq| pq.path().rsplit_once("."))?;
 
+        Some(ext)
+    }
+
+    pub fn set_version(&mut self, version: Version) {
+        self.base.version = version;
+    }
+
+    pub fn as_owned_parts(&self) -> ReqParts {
+        clone_req_parts(&self.base)
+    }
+}
+
+impl Clone for RequestHeader {
+    fn clone(&self) -> Self {
+        Self {
+            base: self.as_owned_parts(),
+            header_name_map: self.header_name_map.clone(),
+            raw_path_fallback: self.raw_path_fallback.clone(),
+        }
+    }
+}
+
+/// converter method, convert ReqParts from http request into format RequestHeaders
+impl From<ReqParts> for RequestHeader {
+    fn from(parts: ReqParts) -> RequestHeader {
+        Self {
+            base: parts,
+            header_name_map: None,
+            raw_path_fallback: vec![]
+        }
+    }
+}
+
+/// converter method, convert RequestHeader into ReqParts
+impl From<RequestHeader> for ReqParts {
+    fn from(value: RequestHeader) -> ReqParts {
+        value.base
+    }
+}
+
+
+
+#[derive(Debug)]
+pub struct ResponseHeader {
+    base: RespParts,
+    header_name_map: Option<CaseMap>
+}
+
+impl AsRef<RespParts> for ResponseHeader {
+    fn as_ref(&self) -> Self {
+        Self {
+            base: self.as_own_parts(),
+            header_name_map: None
+        }
+    }
+}
+
+impl From<RespParts> for ResponseHeader {
+    fn from(value: RespParts) -> ResponseHeader {
+        Self {
+            base: value,
+            header_name_map: None
+        }
+    }
+}
+
+impl From<ResponseHeader> for RespParts {
+    fn from(value: ResponseHeader) -> RespParts {
+        value.base
+    }
+}
+
+impl ResponseHeader {
+
+    fn new(size_hint: Option<usize>) -> Self {
+        let mut resp_header = Self::new_no_case(size_hint);
+        resp_header.header_name_map = Some(CaseMap::with_capacity(http_header_map_upper_bound(
+            size_hint,
+        )));
+
+        resp_header
+    }
+
+    fn new_no_case(size_hint: Option<usize>) -> Self {
+        let mut base = RespBuilder::new().body(()).unwrap().into_parts().0;
+        ResponseHeader {
+            base,
+            header_name_map: None
+        }
+    }
+
+    pub fn build(code: impl TryInto<StatusCode>, size_hint: Option<usize>) -> Result<Self> {
+
+        let mut resp = Self::new(size_hint);
+        resp.base.status = code
+            .try_into()
+            .explain_err(InvalidHTTPHeader, |_| "invalid status")?;
+
+        Ok(resp)
+    }
+
+    pub fn build_no_case(code: impl TryInto<StatusCode>, size_hint: Option<usize>) -> Result<Self> {
+        let mut resp = Self::new_no_case(size_hint);
+        resp.base.status = code
+            .try_into()
+            .explain_err(InvalidHTTPHeader, |_| "invalid status")?;
+
+        Ok(resp)
+    }
+
+    pub fn append_header(
+        &mut self,
+        name: impl IntoCaseHeader,
+        value: impl TryInto<HeaderValue>
+    ) -> Result<bool> {
+
+        let header_value = value
+            .try_into()
+            .explain_err(InvalidHTTPHeader, |_| " invalid value while append")?;
+
+        append_header_value(
+            self.header_name_map.as_mut(),
+            &mut self.base.headers,
+            name,
+            header_value
+        )
+    }
+
+    pub fn insert_header(
+        &mut self,
+        name: impl IntoCaseHeader,
+        value: impl TryInto<HeaderValue>
+    ) -> Result<bool> {
+
+        let header_value = value
+            .try_into()
+            .explain_err(InvalidHTTPHeader, |_| " invalid value while insert")?;
+
+        insert_header_value(
+            self.header_name_map.as_mut(),
+            &mut self.base.headers,
+            name,
+            header_value
+        )
+    }
+
+    pub fn remove_header<'a, N: ?Sized> (&mut self, name: &'a N) -> Option<HeaderValue>
+    where &'a N : 'a + AsHeaderName,
+    {
+        remove_header(self.header_name_map.as_mut(),&mut self.base.headers, name)
+    }
+
+    pub fn set_status(&mut self, status: impl TryInto<StatusCode>) -> Result<()> {
+        self.base.status = status
+            .try_into()
+            .explain_err(InvalidHTTPHeader, |_| "invalid status")
+    }
+
+    pub fn set_version(&mut self, version: Version) {
+        self.base
+            .version = version
+    }
+
+    pub fn as_own_parts(&self) -> RespParts {
+        clone_resp_parts(&self.base)
+    }
+}
+
+/// deep clone [RequestHeader.parts] into a new object
+fn clone_req_parts(me: &ReqParts) -> ReqParts {
+    let mut parts = ReqBuilder::new()
+        .method(me.method.clone())
+        .uri(me.uri.clone())
+        .version(me.version)
+        .body(())
+        .unwrap()
+        .into_parts()
+        .0;
+
+    /// assign headers
+    parts.headers = me.headers.clone();
+
+    parts
+}
+
+fn clone_resp_parts(me: &RespParts) -> RespParts {
+    let mut parts = RespBuilder::new()
+        .status(me.status)
+        .version(me.version)
+        .body(())
+        .unwrap()
+        .into_parts()
+        .0;
+
+    parts.headers = me.headers.clone();
+
+    parts
 }
 
 // This function returns an upper bound on the size of the header map used inside the http crate.
@@ -307,6 +511,40 @@ fn header_to_h1_write(
     value_map: &HMap,
     buf: &mut impl BufMut
 ) {
+    /// define CLRF format. which determine the format of the end of the line
+    const CLRF: &[u8; 2] = b"\r\n";
+
+    /// define http request header key-value delimiter
+    const HEADER_KV_DELIMITER: &[u8; 2] = b": ";
+
+
+    // closure define which
+    if let Some(key_map) = key_map {
+        // define the header key set iterator
+        let iter = key_map.iter().zip(value_map.iter());
+
+        for ((header, case_header), (header2, value)) in iter {
+            if header != header2 {
+                panic!("header iter mismatch: {}, {}", header, header2);
+            }
+
+            buf.put_slice(case_header.as_slice());
+            buf.put_slice(HEADER_KV_DELIMITER);
+            buf.put_slice(value.as_ref());
+            buf.put_slice(CLRF);
+        }
+    } else {
+        for (header, value) in value_map {
+            let title_header = http_header_support::title_header_name_str(header).unwrap_or(header.as_str());
+
+            buf.put_slice(title_header.as_bytes());
+            buf.put_slice(HEADER_KV_DELIMITER);
+            buf.put_slice(value.as_ref());
+            buf.put_slice(CLRF);
+        }
+    }
+
+
 
 }
 
