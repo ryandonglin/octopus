@@ -47,6 +47,43 @@ pub trait IntoCaseHeader {
     fn into_case_header_name(self) -> CaseHttpHeaders;
 }
 
+impl IntoCaseHeader for CaseHttpHeaders {
+    fn into_case_header_name(self) -> CaseHttpHeaders {
+        self
+    }
+}
+impl IntoCaseHeader for String {
+    fn into_case_header_name(self) -> CaseHttpHeaders {
+        CaseHttpHeaders::new(self)
+    }
+}
+
+impl IntoCaseHeader for &'static str {
+    fn into_case_header_name(self) -> CaseHttpHeaders {
+        CaseHttpHeaders(self.into())
+    }
+}
+
+impl IntoCaseHeader for HeaderName {
+    fn into_case_header_name(self) -> CaseHttpHeaders {
+        CaseHttpHeaders(title_header_name(&self))
+    }
+}
+
+impl IntoCaseHeader for &HeaderName {
+    fn into_case_header_name(self) -> CaseHttpHeaders {
+        CaseHttpHeaders(title_header_name(self))
+    }
+}
+
+impl IntoCaseHeader for Bytes {
+    fn into_case_header_name(self) -> CaseHttpHeaders {
+        CaseHttpHeaders(self)
+    }
+}
+
+
+
 pub(crate) fn title_header_name_str(header_name: &HeaderName) -> Option<&'static str> {
 
     /// using * to de-referencing
@@ -67,4 +104,11 @@ pub(crate) fn title_header_name_str(header_name: &HeaderName) -> Option<&'static
             return None;
         }
     })
+}
+
+pub fn title_header_name(header_name: &HeaderName) -> Bytes {
+    title_header_name_str(header_name).map_or_else(
+        || Bytes::copy_from_slice(header_name.as_str().as_bytes()),
+        |s| Bytes::from_static(s.as_bytes()),
+    )
 }
